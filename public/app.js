@@ -235,6 +235,7 @@ function fitsAvailability(start, durationMin, slots) {
 const state = {
   me: null, myGames: [], availability: [], unread: 0,
   calMode: 'month', calCursor: new Date(), onlyAvailable: true, findQuery: '',
+  authView: 'hero', // logged out: 'hero' (landing page) | 'login' | 'register'
 };
 // Invite links look like /join/<token>; remember it until the user is logged in.
 let pendingInvite = location.pathname.startsWith('/join/') ? decodeURIComponent(location.pathname.slice(6)) : null;
@@ -262,7 +263,8 @@ function render() {
   const app = document.getElementById('app');
   app.innerHTML = '';
   if (resetToken) return app.append(resetScreen());
-  if (!state.me) return app.append(authScreen());
+  // Invite links skip the landing page: the visitor already knows why they're here.
+  if (!state.me) return app.append(state.authView === 'hero' && !pendingInvite ? heroScreen() : authScreen(state.authView));
   app.append(shell());
   handleInvite().then(renderView);
   pollBadge();
@@ -298,8 +300,29 @@ function themeToggle() {
   return btn;
 }
 
+// ============================================================ landing page (logged-out visitors)
+function heroScreen() {
+  const toAuth = view => () => { state.authView = view; render(); window.scrollTo(0, 0); };
+  const feature = (title, text) => h('div', { class: 'hero-feature' }, h('h3', {}, title), h('p', {}, text));
+  return h('div', { class: 'hero-page' },
+    h('header', { class: 'topbar' },
+      h('div', { class: 'brand' }, icon('logo'), h('span', {}, 'Session Xero')),
+      h('div', { class: 'top-right' }, themeToggle(), h('button', { class: 'btn', onclick: toAuth('login') }, 'Log in'))),
+    h('section', { class: 'hero' },
+      h('h1', {}, 'Every great campaign starts with ', h('span', { class: 'hero-accent' }, 'Session Zero')),
+      h('p', { class: 'hero-sub' }, 'A tavern-style party finder for tabletop RPGs — built for the hardest part of scheduling: finding a group when you can actually play.'),
+      h('div', { class: 'hero-cta' },
+        h('button', { class: 'btn primary', onclick: toAuth('register') }, 'Find your party'),
+        h('button', { class: 'btn', onclick: toAuth('login') }, 'I have an account'))),
+    h('section', { class: 'hero-features' },
+      feature('Mark when you can play', 'Fill in an availability calendar once, with weekly or monthly repeats, and we only show you tables that fit.'),
+      feature('Find a table that fits', 'Browse public games by system, GM or vibe. Ask to join, then chat with the GM before you commit.'),
+      feature('Host your own campaign', 'Weekly, twice a month, the last Friday… every repeat pattern, shown in each player’s own time zone.'),
+      feature('Keep the party together', 'Every game gets a message board and a calendar entry. Players can also DM each other and read profiles.')));
+}
+
 // ============================================================ auth screen
-function authScreen() {
+function authScreen(initialMode = 'login') {
   let mode = 'login';
   const user = h('input', { type: 'text', autocomplete: 'username', maxlength: 20, required: true });
   const pass = h('input', { type: 'password', autocomplete: 'current-password', required: true });
@@ -322,7 +345,7 @@ function authScreen() {
     swapText.textContent = reg ? 'Already have an account? ' : 'New here? ';
     swap.textContent = reg ? 'Log in' : 'Create an account';
   }
-  setMode('login');
+  setMode(initialMode === 'register' ? 'register' : 'login');
   const form = h('form', {
     onsubmit: async e => {
       e.preventDefault(); err.textContent = '';
@@ -346,9 +369,10 @@ function authScreen() {
   });
   return h('div', { class: 'auth-wrap' }, h('div', { class: 'auth-card' },
     themeToggle(),
+    !pendingInvite && h('button', { class: 'link small', type: 'button', style: 'margin-bottom:.6rem', onclick: () => { state.authView = 'hero'; render(); } }, '← Back'),
     h('div', { class: 'brand' }, icon('logo'), 'Session Xero'),
     h('p', { class: 'muted', style: 'margin-top:0' },
-      pendingInvite ? "You've been invited to a game. Log in or create an account to join." : 'Find, host and schedule tabletop RPG games.'),
+      pendingInvite ? "You've been invited to a game. Log in or create an account to join." : 'Every great campaign starts with Session Zero.'),
     form,
     google && [h('div', { class: 'or-rule' }, 'or'), h('div', { class: 'google-wrap' }, google)]));
 }
