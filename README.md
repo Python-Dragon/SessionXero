@@ -49,6 +49,8 @@ Any SMTP provider works. For Gmail, turn on 2-Step Verification, create an **App
   - Usernames ignore case when logging in.
   - Banned accounts can't sign in by any method.
   - A reset email only goes to a *confirmed* recovery email.
+  - An *unconfirmed* email never blocks or captures anyone. If someone types another person's address onto their own account, the real owner can still add it, and signing in with a Google account that has that address creates a fresh account instead of entering the other one.
+  - A game's time zone that isn't a real zone (the server can only check its shape) is shown in each viewer's own zone instead of breaking the page.
 - Sign-in and sensitive actions are rate-limited by PocketBase's rate limiter (configured in the migration).
 - **Continue with Google** (when Google is set up, see above):
   - It's an alternative to the password; either one signs you in.

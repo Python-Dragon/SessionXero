@@ -129,7 +129,10 @@ routerAdd("POST", "/api/app/account/email", (e) => {
   if (!c.validEmail(email)) throw c.bad("Enter a valid email address");
   c.requireCurrentPassword(u, b);
   const other = c.first("users", "email = {:v} && id != {:id}", { v: email, id: u.id });
-  if (other) throw c.bad("That email is already used by another account");
+  if (other && other.verified()) throw c.bad("That email is already used by another account");
+  // Someone else typed this address but never proved it's theirs: that claim doesn't block the real owner.
+  // (Whoever clicks the confirmation link in that inbox ends up with it.)
+  if (other) c.releaseUnverifiedEmail(other);
   u.setEmail(email);
   u.setVerified(false); // becomes the recovery email once the link is clicked
   $app.save(u);

@@ -150,13 +150,22 @@ function zonedToDate(y, m, d, hh, mm, tz) {
   }
   return new Date(t);
 }
-const gameTz = g => g.timeZone || LOCAL_TZ;
+// The server can only check that a zone name looks right, so an unknown zone (e.g. "Mars/Base")
+// falls back to the viewer's own zone here instead of throwing and breaking every page that lists the game.
+const tzValid = {};
+function knownTz(tz) {
+  if (!tz) return null;
+  if (!(tz in tzValid)) { try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); tzValid[tz] = true; } catch { tzValid[tz] = false; } }
+  return tzValid[tz] ? tz : null;
+}
+const gameTz = g => knownTz(g.timeZone) || LOCAL_TZ;
 // Differs from the viewer's clock? Show the GM's own time, e.g. "Wed 12:00 PM EDT for the GM".
 function gmTimeNote(g, when) {
-  if (!when || !g.timeZone) return '';
-  const a = zonedParts(when, g.timeZone), b = zonedParts(when, LOCAL_TZ);
+  const tz = knownTz(g.timeZone);
+  if (!when || !tz) return '';
+  const a = zonedParts(when, tz), b = zonedParts(when, LOCAL_TZ);
   if (a.d === b.d && a.hh === b.hh && a.mm === b.mm) return '';
-  return ` (${when.toLocaleString([], { timeZone: g.timeZone, weekday: 'short', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })} for the GM)`;
+  return ` (${when.toLocaleString([], { timeZone: tz, weekday: 'short', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })} for the GM)`;
 }
 
 // ---- recurrence

@@ -18,6 +18,7 @@ migrate((app) => {
   users.passwordAuth.identityFields = ["username", "email"];
   users.authAlert.enabled = false;                                       // no "new login" emails
   // Anyone can sign up, but not grant themselves admin/banned/verified. Everything else is custom routes.
+  // (Relaxed in 1700000001_google_signup.js.)
   users.createRule = "@request.body.is_admin:isset = false && @request.body.banned:isset = false && " +
     "@request.body.verified:isset = false && @request.body.email:isset = false";
   users.listRule = null;

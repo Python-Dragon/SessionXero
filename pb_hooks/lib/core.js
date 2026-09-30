@@ -70,6 +70,13 @@ function requireCurrentPassword(u, b) {
     throw bad("Your current password is wrong");
 }
 
+// Drop an email address from an account that never confirmed it (so its owner can use it elsewhere).
+function releaseUnverifiedEmail(u) {
+  if (u.verified() || !u.email()) return;
+  u.setEmail("");
+  $app.save(u);
+}
+
 function notify(userId, type, payload) {
   create("notifications", { user: userId, type, payload, is_read: false });
 }
@@ -118,7 +125,8 @@ function validateGameInput(b) {
   const duration = Number(b.durationMin);
   const recurrence = String(b.recurrence || "none");
   const visibility = String(b.visibility || "public");
-  // Goja has no Intl, so check the shape of an IANA zone name; the browser falls back if it's unknown.
+  // Goja has no Intl, so only the shape of an IANA zone name is checked here; the browser
+  // (knownTz in pb_public/app.js) treats an unknown zone as the viewer's own.
   const timeZone = String(b.timeZone || "").slice(0, 64);
   if (timeZone && !/^[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z0-9_+-]+){0,2}$/.test(timeZone)) throw bad("Invalid time zone");
   if (!title || title.length > 100) throw bad("Title is required (max 100 characters)");
@@ -198,7 +206,7 @@ function unreadCounts(userId) {
 
 module.exports = {
   body, param, bad, find, first, all, create, iso, sql, me, requireAdmin, publicUser, profileFields, userByName,
-  wordCount, cleanLine, validEmail, checkNewUsername, checkNewPassword, requireCurrentPassword, notify,
+  wordCount, cleanLine, validEmail, checkNewUsername, checkNewPassword, requireCurrentPassword, releaseUnverifiedEmail, notify,
   getGame, isMember, isKicked, requireMember, requireGM, addMember, lastRequest, validateGameInput, gameSummary,
   getOrCreateDm, getDmForUser, validateBody, postMessage, listMessages, markRead, unreadCounts,
 };

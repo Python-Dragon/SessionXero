@@ -19,7 +19,13 @@ onRecordAuthWithPasswordRequest((e) => {
 
 // Regular sign-up: the person chose a password; usernames in ADMIN_USERNAMES join the moderation team.
 onRecordCreateRequest((e) => {
-  if (e.requestInfo().body.password) e.record.set("has_password", true);
+  // This also runs for accounts created by Google sign-in (request context "oauth2"), which carry Google's
+  // verified email and a random password PocketBase generates. Only a real sign-up chose its password, and it
+  // must not set an email: that's added and confirmed later from Password & sign-in.
+  const info = e.requestInfo();
+  if (info.context === "oauth2") return e.next();
+  if (info.body.email) throw new BadRequestError("Add a recovery email after signing up, from Profile → Password & sign-in");
+  e.record.set("has_password", true);
   const admins = String($os.getenv("ADMIN_USERNAMES") || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
   if (admins.includes(e.record.getString("username").toLowerCase())) e.record.set("is_admin", true);
   return e.next();
@@ -28,8 +34,24 @@ onRecordCreateRequest((e) => {
 // First Google sign-in creates an account: give it a free username based on the Google name/email.
 // The browser then offers to change it (the response's meta.isNew is true).
 onRecordAuthWithOAuth2Request((e) => {
+  const c = require(`${__hooks}/lib/core.js`);
+  // PocketBase falls back to "the account with the same email". If that account never confirmed the
+  // address, anyone could have typed it there (e.g. to catch the real owner's Google sign-in), so don't
+  // hand the Google user that account: drop the unconfirmed claim and create a fresh account instead.
+  // (Signing in when already linked, or linking while signed in, still works as normal.)
+  if (!e.isNewRecord && e.record && !e.record.verified() && !(e.auth && e.auth.id === e.record.id)) {
+    let linked = null;
+    try {
+      linked = $app.findFirstExternalAuthByExpr($dbx.hashExp({
+        collectionRef: e.record.collection().id, recordRef: e.record.id, provider: e.providerName, providerId: e.oAuth2User.id }));
+    } catch (_) {}
+    if (!linked) {
+      c.releaseUnverifiedEmail(e.record);
+      e.record = null;
+      e.isNewRecord = true;
+    }
+  }
   if (e.isNewRecord) {
-    const c = require(`${__hooks}/lib/core.js`);
     const u = e.oAuth2User || {};
     let stem = String(u.username || u.name || String(u.email || "").split("@")[0] || "player").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 16);
     if (stem.length < 3) stem = ("player" + stem).slice(0, 16);
