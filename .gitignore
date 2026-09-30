@@ -2,3 +2,6 @@ node_modules/
 data.sqlite*
 .env
 .env.*
+# PocketBase: the binary (npm run setup downloads it) and the database
+pocketbase/
+pb_data/

@@ -35,25 +35,46 @@ const ICONS = {
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
   moon: '<svg viewBox="0 0 12 12" shape-rendering="crispEdges" fill="currentColor"><path d="M4 1h4v1H6v1H5v2H4v2h1v2h1v1h2v1H4v-1H3V9H2V3h1V2h1z"/></svg>',
+  google: '<svg viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.5l6.7-6.7C35.6 2.4 30.2 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.8 6C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 7l7.4 5.7c4.3-4 6.9-9.9 6.9-17.2z"/><path fill="#FBBC05" d="M10.5 28.7c-.5-1.4-.8-3-.8-4.7s.3-3.3.8-4.7l-7.8-6C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.8-6z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.8 6C6.6 42.6 14.6 48 24 48z"/></svg>',
   sun: '<svg viewBox="0 0 12 12" shape-rendering="crispEdges" fill="currentColor"><path d="M5 0h2v2H5zM5 10h2v2H5zM0 5h2v2H0zM10 5h2v2h-2zM1 1h2v2H1zM9 1h2v2H9zM1 9h2v2H1zM9 9h2v2H9zM4 3h4v1h1v4H8v1H4V8H3V4h1z"/></svg>',
 };
 function icon(name) { const s = document.createElement('span'); s.style.display = 'contents'; s.innerHTML = ICONS[name]; return s; }
 
 // ============================================================ API + UI utilities
+// PocketBase handles accounts (sign-up, login, Google, reset/verify emails); its SDK keeps the
+// auth token in localStorage. Everything else goes through the site's own routes under /api/app.
+const pb = new PocketBase(location.origin);
+
+// Readable text for a PocketBase error: { message, data: { field: { code, message } } }.
+const FIELD_ERRORS = {
+  username: { validation_not_unique: 'That username is taken', default: 'Username must be 3–20 characters: letters, numbers, _ or -' },
+  password: { default: 'Password must be at least 8 characters' },
+  passwordConfirm: { default: "Passwords don't match" },
+};
+function errorText(err) {
+  const d = (err && (err.response || err.data)) || {};
+  const fields = d.data && typeof d.data === 'object' ? Object.entries(d.data) : [];
+  if (fields.length) return fields.map(([k, v]) => (FIELD_ERRORS[k] && (FIELD_ERRORS[k][v.code] || FIELD_ERRORS[k].default)) || v.message).join('. ');
+  if ((err && err.status) === 429) return 'Too many attempts. Try again in a few minutes.';
+  return String(d.message || (err && err.message) || 'Request failed').replace(/\.$/, '');
+}
+
 async function api(path, opts = {}) {
-  const res = await fetch('/api' + path, {
-    method: opts.method || (opts.body ? 'POST' : 'GET'),
-    headers: opts.body ? { 'Content-Type': 'application/json' } : {},
+  const headers = opts.body ? { 'Content-Type': 'application/json' } : {};
+  if (pb.authStore.token) headers.Authorization = pb.authStore.token;
+  const res = await fetch('/api/app' + path, {
+    method: opts.method || (opts.body ? 'POST' : 'GET'), headers,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
-    credentials: 'same-origin',
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (res.status === 401 && state.me && !opts.quiet) { state.me = null; render(); }
-    throw new Error(data.error || 'Request failed');
+    if (res.status === 401 && state.me && !opts.quiet) { pb.authStore.clear(); state.me = null; render(); }
+    throw new Error(errorText({ status: res.status, response: data }));
   }
   return data;
 }
+// Routes that change the password or email return a fresh token (the old one stops working).
+const keepSession = r => { if (r && r.token) pb.authStore.save(r.token, r.record); return r; };
 function toast(msg, isError) {
   const t = h('div', { class: 'toast' + (isError ? ' error' : '') }, msg);
   document.getElementById('toast-root').append(t);
@@ -247,16 +268,25 @@ window.addEventListener('hashchange', () => renderView());
 // Links from emails: /?reset=<token> (choose a new password), /?verify=<token> (confirm recovery email).
 let resetToken = null;
 async function boot() {
-  state.config = await api('/config', { quiet: true }).catch(() => ({}));
+  state.authMethods = await pb.collection('users').listAuthMethods().catch(() => null);
   const params = new URLSearchParams(location.search);
   resetToken = params.get('reset');
   const verifyToken = params.get('verify');
   if (resetToken || verifyToken) history.replaceState(null, '', location.pathname + location.hash);
-  if (verifyToken) await api('/account/email/verify', { body: { token: verifyToken }, quiet: true })
-    .then(r => toast(`Recovery email confirmed: ${r.email}`)).catch(e => toast(e.message, true));
-  try { state.me = await api('/me', { quiet: true }); } catch { state.me = null; }
+  if (verifyToken) await pb.collection('users').confirmVerification(verifyToken)
+    .then(() => toast('Recovery email confirmed')).catch(e => toast(errorText(e), true));
+  await loadMe();
   render();
 }
+// Check the saved sign-in (refreshing its token) and load the current user.
+async function loadMe() {
+  state.me = null;
+  if (!pb.authStore.isValid) return;
+  try { await pb.collection('users').authRefresh(); state.me = await api('/me', { quiet: true }); }
+  catch { pb.authStore.clear(); }
+}
+const googleEnabled = () => !!(state.authMethods && state.authMethods.oauth2 && state.authMethods.oauth2.enabled &&
+  state.authMethods.oauth2.providers.some(p => p.name === 'google'));
 
 function render() {
   clearViewTimers();
@@ -351,22 +381,22 @@ function authScreen(initialMode = 'login') {
       e.preventDefault(); err.textContent = '';
       if (mode === 'register' && pass.value !== pass2.value) { err.textContent = "Passwords don't match"; return; }
       submit.disabled = true;
+      const users = pb.collection('users'), username = user.value.trim();
       try {
-        await api('/' + mode, { body: { username: user.value, password: pass.value }, quiet: true });
+        if (mode === 'register') await users.create({ username, password: pass.value, passwordConfirm: pass2.value });
+        try { await users.authWithPassword(username, pass.value); }
+        catch (ex) { throw new Error(ex.status === 400 ? 'Wrong username or password' : errorText(ex)); }
         state.me = await api('/me'); render();
         if (mode === 'register') openProfileEditor({ onboarding: true });
-      } catch (ex) { err.textContent = ex.message; } finally { submit.disabled = false; }
+      } catch (ex) { err.textContent = ex instanceof Error && !ex.response ? ex.message : errorText(ex); }
+      finally { submit.disabled = false; }
     },
   }, title, h('label', {}, 'Username'), user, h('label', {}, 'Password'), pass, forgot, confirmWrap, hint, err, submit,
     h('p', { style: 'text-align:center;margin:1rem 0 0' }, swapText, swap));
-  const google = googleButton(async credential => {
-    err.textContent = '';
-    try {
-      const r = await api('/google/login', { body: { credential }, quiet: true });
-      if (r.needsAccount) return openGoogleSignup(credential, r.email);
-      state.me = await api('/me'); render();
-    } catch (ex) { err.textContent = ex.message; }
-  });
+  const google = googleButton('Continue with Google', async auth => {
+    state.me = await api('/me'); render();
+    if (auth.meta && auth.meta.isNew) openPickUsername();
+  }, msg => { err.textContent = msg; });
   return h('div', { class: 'auth-wrap' }, h('div', { class: 'auth-card' },
     themeToggle(),
     !pendingInvite && h('button', { class: 'link small', type: 'button', style: 'margin-bottom:.6rem', onclick: () => { state.authView = 'hero'; render(); } }, '← Back'),
@@ -390,10 +420,14 @@ function resetScreen() {
       if (pass.value !== pass2.value) { err.textContent = "Passwords don't match"; return; }
       submit.disabled = true;
       try {
-        await api('/password/reset', { body: { token: resetToken, password: pass.value }, quiet: true });
-        resetToken = null; state.me = await api('/me'); render();
-        toast("Password changed. You're signed in, and other devices were signed out.");
-      } catch (ex) { err.textContent = ex.message; submit.disabled = false; }
+        await pb.collection('users').confirmPasswordReset(resetToken, pass.value, pass2.value);
+        resetToken = null; pb.authStore.clear(); state.me = null; state.authView = 'login'; render();
+        toast('Password changed, and every device was signed out. Log in with your new password.');
+      } catch (ex) {
+        err.textContent = ex.status === 400 && !(ex.response && ex.response.data && ex.response.data.password)
+          ? 'This link is invalid or has expired. Please request a new one.' : errorText(ex);
+        submit.disabled = false;
+      }
     },
   }, h('h2', {}, 'Choose a new password'),
   h('label', {}, 'New password'), pass, h('label', {}, 'Confirm new password'), pass2,
@@ -426,40 +460,47 @@ function openForgotPassword() {
   openModal(body);
 }
 
-// A Google account with no Session Xero account yet: pick a username to create one.
-function openGoogleSignup(credential, email) {
-  const user = h('input', { type: 'text', maxlength: 20, autocomplete: 'username' });
+// First Google sign-in created an account with a generated username: offer to change it.
+function openPickUsername() {
+  const user = h('input', { type: 'text', maxlength: 20, autocomplete: 'username', value: state.me.username });
   const err = h('div', { class: 'field-error' });
+  const next = () => { closeModal(); openProfileEditor({ onboarding: true }); };
   openModal(h('form', {
     onsubmit: async e => {
       e.preventDefault(); err.textContent = '';
       try {
-        await api('/google/register', { body: { credential, username: user.value }, quiet: true });
-        closeModal(); state.me = await api('/me'); render();
-        openProfileEditor({ onboarding: true });
+        if (user.value.trim() !== state.me.username) await api('/username', { method: 'PUT', body: { username: user.value } });
+        state.me = await api('/me'); render(); next();
       } catch (ex) { err.textContent = ex.message; }
     },
-  }, h('h2', {}, 'Create an account with Google'),
-  h('p', { class: 'muted', style: 'margin-top:0' }, `No account here is linked to ${email || 'that Google account'} yet. Pick a username to create one. You'll sign in with Google, and ${email ? 'that address' : 'your Google email'} becomes your recovery email.`),
+  }, h('h2', {}, 'Pick your username'),
+  h('p', { class: 'muted', style: 'margin-top:0' }, `Your account is set up with Google. We picked the username "${state.me.username}". It's how other players find and invite you, so change it now if you like.`),
   h('label', {}, 'Username'), user, h('div', { class: 'muted small' }, '3–20 letters, numbers, _ or -.'), err,
-  h('p', { class: 'muted small' }, 'Already have an account? Close this, log in with your password, then link Google from Profile → Password & sign-in.'),
-  h('div', { class: 'modal-foot' }, h('button', { class: 'btn', type: 'button', onclick: closeModal }, 'Cancel'),
-    h('button', { class: 'btn primary', type: 'submit' }, 'Create account'))));
+  h('div', { class: 'modal-foot' }, h('button', { class: 'btn', type: 'button', onclick: next }, 'Keep it'),
+    h('button', { class: 'btn primary', type: 'submit' }, 'Save username'))));
 }
 
-// "Sign in with Google" button (Google Identity Services). Returns null when the server has no client ID.
-let gisLoad = null;
-function googleButton(onCredential, text = 'signin_with') {
-  const clientId = state.config && state.config.googleClientId;
-  if (!clientId) return null;
-  const el = h('div', { class: 'google-btn' });
-  gisLoad ||= new Promise((resolve, reject) =>
-    document.head.append(h('script', { src: 'https://accounts.google.com/gsi/client', async: true, onload: resolve, onerror: reject })));
-  gisLoad.then(() => {
-    google.accounts.id.initialize({ client_id: clientId, callback: r => onCredential(r.credential) });
-    google.accounts.id.renderButton(el, { theme: 'outline', size: 'large', text, width: 260 });
-  }).catch(() => { gisLoad = null; el.append(h('span', { class: 'muted small' }, "Couldn't load Google sign-in.")); });
-  return el;
+// "Continue with Google" (PocketBase OAuth2 in a popup). Returns null when Google isn't set up on the server.
+// While signed in, the same flow links Google to the current account instead of signing in.
+function googleButton(label, onDone, onError) {
+  if (!googleEnabled()) return null;
+  const btn = h('button', { class: 'btn google-btn', type: 'button', onclick: async () => {
+    const before = pb.authStore.token, beforeRecord = pb.authStore.record;
+    btn.disabled = true;
+    try {
+      const auth = await pb.collection('users').authWithOAuth2({ provider: 'google' });
+      // Linking a Google account that already belongs to someone else would switch accounts; undo that.
+      if (before && beforeRecord && auth.record.id !== beforeRecord.id) {
+        pb.authStore.save(before, beforeRecord);
+        throw new Error('That Google account is already linked to a different user');
+      }
+      await onDone(auth);
+    } catch (ex) {
+      const msg = ex.isAbort || /cancel|closed/i.test(String(ex.message)) ? '' : (ex.response ? errorText(ex) : ex.message);
+      if (msg) (onError || (m => toast(m, true)))(msg);
+    } finally { btn.disabled = false; }
+  } }, icon('google'), label);
+  return btn;
 }
 
 // ============================================================ shell (top bar, host button)
@@ -480,7 +521,7 @@ function shell() {
     { label: 'Edit profile', onClick: () => openProfileEditor() },
     { label: 'Availability', onClick: openAvailability },
     { label: 'Password & sign-in', onClick: openSecurity },
-    { label: 'Log out', danger: true, onClick: act(async () => { await api('/logout', { body: {} }); state.me = null; render(); }) },
+    { label: 'Log out', danger: true, onClick: () => { pb.authStore.clear(); state.me = null; state.authView = 'login'; render(); } },
   ]); } }, icon('user'), h('span', { class: 'avail-btn-label' }, 'Profile'));
   return h('div', {},
     h('header', { class: 'topbar' },
@@ -909,7 +950,7 @@ async function openProfile(userId) {
   const u = await api('/users/' + userId).catch(e => { toast(e.message, true); return null; });
   if (!u) return;
   const mine = u.id === state.me.id;
-  const since = new Date(u.memberSince.replace(' ', 'T') + 'Z');
+  const since = new Date(u.memberSince);
   openModal(h('div', {},
     h('div', { class: 'profile-head' },
       h('h2', { style: 'margin:0' }, nameOf(u)), u.pronouns && h('span', { class: 'pill' }, u.pronouns)),
@@ -984,7 +1025,7 @@ async function openSecurity() {
       pwErr.textContent = '';
       if (next.value !== next2.value) { pwErr.textContent = "New passwords don't match"; return; }
       try {
-        await api('/password/change', { body: { currentPassword: cur.value, password: next.value } });
+        keepSession(await api('/password/change', { body: { currentPassword: cur.value, password: next.value } }));
         toast(me.hasPassword ? 'Password changed' : 'Password set'); reopen();
       } catch (e) { pwErr.textContent = e.message; }
     } }, me.hasPassword ? 'Change password' : 'Set password'));
@@ -995,38 +1036,36 @@ async function openSecurity() {
   const recovery = section('Recovery email',
     h('p', { class: 'muted small', style: 'margin-top:0' }, 'Used only to reset your password if you forget it. It is never shown to other members.'),
     h('div', {}, me.email ? ['Current: ', h('strong', {}, me.email)] : h('span', { class: 'muted' }, 'No recovery email yet.')),
-    me.pendingEmail && h('div', { class: 'banner small', style: 'margin-top:.4rem' }, `Waiting for you to confirm ${me.pendingEmail}. Check that inbox for a link (it expires in 24 hours).`),
+    me.pendingEmail && h('div', { class: 'banner small', style: 'margin-top:.4rem' }, `Waiting for you to confirm ${me.pendingEmail}. Check that inbox for the confirmation link.`),
     h('label', {}, me.email ? 'Change to' : 'Email address'), email,
     me.hasPassword && [h('label', {}, 'Current password'), emailPw], emErr,
     h('div', { class: 'row', style: 'margin-top:.4rem' },
       h('button', { class: 'btn primary', onclick: async () => {
         emErr.textContent = '';
         try {
-          await api('/account/email', { body: { email: email.value, currentPassword: emailPw.value } });
+          keepSession(await api('/account/email', { body: { email: email.value, currentPassword: emailPw.value } }));
           toast(`Confirmation link sent to ${email.value.trim()}`); reopen();
         } catch (e) { emErr.textContent = e.message; }
       } }, 'Send confirmation link'),
       me.email && h('button', { class: 'btn danger', onclick: async () => {
         emErr.textContent = '';
         if (!confirm('Remove your recovery email? You won’t be able to reset a forgotten password.')) return;
-        try { await api('/account/email/remove', { body: { currentPassword: emailPw.value } }); toast('Recovery email removed'); reopen(); }
+        try { keepSession(await api('/account/email/remove', { body: { currentPassword: emailPw.value } })); toast('Recovery email removed'); reopen(); }
         catch (e) { emErr.textContent = e.message; }
       } }, 'Remove')));
 
   // Google
   const gErr = h('div', { class: 'field-error' });
   const googleBox = section('Sign in with Google',
-    me.googleEmail
-      ? [h('div', {}, 'Linked to ', h('strong', {}, me.googleEmail), '. You can sign in with Google instead of your password.'),
+    me.googleLinked
+      ? [h('div', {}, 'Linked. You can sign in with Google instead of your password.'),
          h('div', { class: 'row', style: 'margin-top:.5rem' }, h('button', { class: 'btn danger', disabled: !me.hasPassword, onclick: async () => {
            try { await api('/google/unlink', { body: {} }); toast('Google account unlinked'); reopen(); } catch (e) { gErr.textContent = e.message; }
          } }, 'Unlink Google')),
          !me.hasPassword && h('div', { class: 'muted small' }, 'Set a password above before unlinking, so you can still sign in.')]
       : [h('p', { class: 'muted small', style: 'margin-top:0' }, 'Link a Google account to sign in with one click instead of your password.'),
-         googleButton(async credential => {
-           gErr.textContent = '';
-           try { await api('/google/link', { body: { credential } }); toast('Google account linked'); reopen(); } catch (e) { gErr.textContent = e.message; }
-         }, 'continue_with') || h('div', { class: 'muted small' }, "Google sign-in isn't set up on this server yet.")],
+         googleButton('Link Google account', async () => { toast('Google account linked'); reopen(); }, msg => { gErr.textContent = msg; })
+           || h('div', { class: 'muted small' }, "Google sign-in isn't set up on this server yet.")],
     gErr);
 
   openModal(h('div', {}, h('h2', {}, 'Password & sign-in'), password, recovery, googleBox,
@@ -1169,7 +1208,7 @@ function openReport(user, context, contextId, message) {
       h('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
       h('button', { class: 'btn primary', onclick: async () => {
         try {
-          await api('/reports', { body: { reportedId: user.id, context, contextId: Number(contextId), messageId: message ? message.id : null, reason: reason.value } });
+          await api('/reports', { body: { reportedId: user.id, context, contextId: String(contextId), messageId: message ? message.id : null, reason: reason.value } });
           closeModal(); toast('Report sent to the moderation team. Thank you.');
         } catch (e) { err.textContent = e.message; }
       } }, 'Send report'))));
@@ -1198,7 +1237,7 @@ async function viewMessages(view, kind, id) {
   const list = h('div', { class: 'thread-list' });
   // Red count on each conversation with unread messages (not the one you have open; opening it reads it).
   const badges = { dm: {}, game: {} };
-  const isOpen = (k, tid) => kind === k && Number(id) === tid;
+  const isOpen = (k, tid) => kind === k && id === tid;
   const threadButton = (k, tid, title, preview) => {
     const badge = badges[k][tid] = h('span', { class: 'thread-badge hidden' });
     return h('button', { class: 'thread-item' + (isOpen(k, tid) ? ' active' : ''), onclick: () => go(`#/messages/${k}/${tid}`) },
@@ -1206,7 +1245,7 @@ async function viewMessages(view, kind, id) {
   };
   const paintBadges = u => {
     for (const k of ['dm', 'game']) for (const [tid, el] of Object.entries(badges[k])) {
-      const n = isOpen(k, Number(tid)) ? 0 : (u[k][tid] || 0);
+      const n = isOpen(k, tid) ? 0 : (u[k][tid] || 0);
       el.textContent = countLabel(n); el.classList.toggle('hidden', !n);
       el.parentNode.parentNode.classList.toggle('unread', !!n);
     }

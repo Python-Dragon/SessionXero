@@ -1,61 +1,64 @@
 # Session Xero: tabletop RPG scheduler
 
-A website for finding, hosting and scheduling tabletop RPG games. It runs on Node.js with SQLite and a plain HTML/CSS/JS front end, and there's no build step.
+A website for finding, hosting and scheduling tabletop RPG games. The backend is [PocketBase](https://pocketbase.io): a single program that provides the database, accounts, the admin dashboard and hosting. The site's own rules live in PocketBase JavaScript hooks. The front end is plain HTML/CSS/JS with no build step.
 
 ## Run it
 
-Requires **Node.js 22.13 or newer**. That version has SQLite built in, so there's nothing native to compile.
+Requires **Node.js 18+**, but only for the two helper scripts; the server itself is the PocketBase binary.
 
 ```bash
-npm install
+npm run setup        # downloads PocketBase 0.40.4 for your OS into ./pocketbase/
 npm start            # http://localhost:3000
 ```
 
-Settings (environment variables):
+The first time it starts, PocketBase prints a link for creating a **superuser** (the owner account for the dashboard at `http://localhost:3000/_/`). You can also run `npm run superuser -- you@example.com yourpassword`. The dashboard lets you browse and edit all data, view logs, make backups, and set up email and Google sign-in.
+
+To add an account to the site's admin/moderation team, run `npm run make-admin -- <username>`. To take it away, run `npm run remove-admin -- <username>`.
+
+Settings (environment variables, all optional; anything left unset can be configured in the dashboard instead):
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `3000` | Port the site runs on |
-| `DB_PATH` | `./data.sqlite` | Where the database file lives |
-| `ADMIN_USERNAMES` | (none) | Comma-separated usernames that become admins when they register |
+| `PB_DATA` | `./pb_data` | Where PocketBase keeps its database and files |
 | `BASE_URL` | `http://localhost:<PORT>` | Public address of the site, used in links inside emails |
-| `SMTP_URL` | (none) | Outgoing mail server, e.g. `smtps://user:app-password@smtp.gmail.com:465`. Without it, emails are printed to the server console |
-| `MAIL_FROM` | `Session Xero <no-reply@localhost>` | Sender shown on emails |
-| `GOOGLE_CLIENT_ID` | (none) | OAuth Web client ID. It turns on "Sign in with Google" (see below) |
+| `SMTP_URL` | (none) | Outgoing mail, e.g. `smtps://user:app-password@smtp.gmail.com:465`. Without it, emails are printed to the server console |
+| `MAIL_FROM` | `Session Xero <no-reply@example.com>` | Sender shown on emails |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | (none) | Turns on "Continue with Google" (see below) |
+| `ADMIN_USERNAMES` | (none) | Comma-separated usernames that join the admin team when they sign up |
 
 ### Setting up Google sign-in
-1. Go to [Google Cloud Console](https://console.cloud.google.com/). Create a project, then open **APIs & Services → OAuth consent screen** and fill it in (External, app name, support email).
+1. Go to [Google Cloud Console](https://console.cloud.google.com/). Create a project, then open **APIs & Services → OAuth consent screen** and fill it in (External, app name "Session Xero", support email).
 2. Go to **APIs & Services → Credentials → Create credentials → OAuth client ID**, and choose **Web application**.
-3. Under **Authorized JavaScript origins**, add every address the site is served from, e.g. `http://localhost:3000` and `https://yourdomain.com`. No redirect URI is needed.
-4. Copy the client ID (`….apps.googleusercontent.com`) and start the server with it:
-   - PowerShell: `$env:GOOGLE_CLIENT_ID="…"; npm start`
-   - bash: `GOOGLE_CLIENT_ID=… npm start`
+3. Under **Authorized redirect URIs**, add `<BASE_URL>/api/oauth2-redirect`, e.g. `http://localhost:3000/api/oauth2-redirect` and `https://yourdomain.com/api/oauth2-redirect`.
+4. Copy the client ID and client secret, and start the server with them:
+   - PowerShell: `$env:GOOGLE_CLIENT_ID="…"; $env:GOOGLE_CLIENT_SECRET="…"; npm start`
+   - bash: `GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… npm start`
+
+   Alternatively, enter them in the dashboard under **Collections → users → Options → OAuth2**.
 
 ### Setting up email
-Any SMTP provider works. For Gmail, turn on 2-Step Verification, create an **App password**, and use `SMTP_URL=smtps://you@gmail.com:APP_PASSWORD@smtp.gmail.com:465` with `MAIL_FROM="Session Xero <you@gmail.com>"`. Set `BASE_URL` to the site's public address so links in emails point to the right place.
-
-To make an existing account part of the admin/moderation team, run `npm run make-admin -- <username>`. Add `--remove` to revoke it.
+Any SMTP provider works. For Gmail, turn on 2-Step Verification, create an **App password**, and use `SMTP_URL=smtps://you@gmail.com:APP_PASSWORD@smtp.gmail.com:465` with `MAIL_FROM="Session Xero <you@gmail.com>"`. You can also enter these in the dashboard under **Settings → Mail settings**.
 
 ## Features
 
 **Accounts**
 - Usernames are unique, and uniqueness ignores case. They can be 3–20 characters: letters, numbers, `_` and `-`.
 - Passwords can be anything 8+ characters long.
-- Passwords are hashed with **scrypt** (N=16384, r=8, p=1) using a random 16-byte salt per user and compared in constant time.
-- Sessions use random 256-bit tokens in an HttpOnly, SameSite=Lax cookie. Only a SHA-256 of each token is stored in the database.
-- Login and registration are rate-limited.
-- **Sign in with Google** (when `GOOGLE_CLIENT_ID` is set):
+- Accounts, passwords (bcrypt), sign-in tokens, Google sign-in and the reset/confirmation emails are handled by **PocketBase**'s built-in auth. The site adds these rules in `pb_hooks/auth.pb.js`:
+  - Usernames ignore case when logging in.
+  - Banned accounts can't sign in by any method.
+  - A reset email only goes to a *confirmed* recovery email.
+- Sign-in and sensitive actions are rate-limited by PocketBase's rate limiter (configured in the migration).
+- **Continue with Google** (when Google is set up, see above):
   - It's an alternative to the password; either one signs you in.
-  - New users can create an account with Google by picking a username.
-  - Existing users can link or unlink Google under **Profile → Password & sign-in**.
-  - Google's sign-in tokens are checked on the server against Google's published keys, the client ID, the issuer and the expiry.
+  - The first Google sign-in creates an account with a generated username and offers to change it.
+  - Signed-in users can link or unlink Google under **Profile → Password & sign-in**.
   - An account can't unlink Google until it has a password.
 - **Password & sign-in (Profile menu):** change or set your password, which signs out your other devices. You can also add a **recovery email**, which only counts once you click the confirmation link sent to it.
-- **Forgot password:** from the login screen, enter your username or recovery email to get a one-time reset link, valid for 1 hour.
-  - Only a hash of the link's token is stored.
+- **Forgot password:** from the login screen, enter your username or recovery email to get a one-time reset link.
   - The answer is the same whether or not an account matched.
   - Resetting signs out every device.
-  - Links in emails always use `BASE_URL`, never the request's Host header.
 - **Profiles:** a preferred name, pronouns, and a public bio of up to 300 words, all optional. New users are offered profile setup right after they sign up, then availability. The **Profile menu (top-right)** has View my profile, Edit profile, Availability and Log out. Click anyone's name on a board, in a member list, in a DM or in a join request to see their profile.
 
 **Scheduling**
@@ -90,19 +93,20 @@ To make an existing account part of the admin/moderation team, run `npm run make
 ## Layout
 
 ```
-server.js            API routes + static hosting
-db.js                SQLite schema
-mail.js              outgoing email (SMTP, or console output when not set up)
-google-auth.js       verifies Google sign-in tokens
-scripts/make-admin.js
-public/index.html    app shell
-public/app.js        all front-end views
-public/styles.css
+pb_migrations/1700000000_init.js   database schema, access rules, email templates, rate limits
+pb_hooks/lib/core.js               shared helpers (permissions, games, messages, unread counts)
+pb_hooks/accounts.pb.js            /api/app: me, profiles, availability, password & email
+pb_hooks/games.pb.js               /api/app: hosting, listing, invites, join requests, kick/leave
+pb_hooks/messages.pb.js            /api/app: boards, DMs, reports, notifications, admin
+pb_hooks/auth.pb.js                sign-in rules, env settings, dev email fallback, make-admin
+pb_public/                         the site (index.html, app.js, styles.css, tavern.js, vendor/pocketbase.umd.js)
+scripts/setup.js, scripts/run.js   download / run PocketBase with this project's folders
 ```
+
+Only `users` is reachable through PocketBase's standard collections API, and only for signing up and reading your own record. Every other collection is superuser-only. The browser goes through the `/api/app` routes, which enforce who may see or change what.
 
 ## Before going live
 
-- Serve it over **HTTPS** behind a reverse proxy such as nginx or Caddy. The cookie gets the `Secure` flag automatically when `X-Forwarded-Proto: https` is present. Add `app.set('trust proxy', 1)` in `server.js` so rate limiting sees real client IPs.
-- Chat refreshes by polling every 3 seconds, which is fine for small communities. Switch to WebSockets if traffic grows.
-- The rate limiter keeps its counts in memory, so a restart resets them.
-- Back up `data.sqlite`.
+- Serve it over **HTTPS** behind a reverse proxy such as nginx or Caddy, or use PocketBase's built-in automatic HTTPS: `pocketbase serve yourdomain.com`. Set `BASE_URL` to the public address. If you use a proxy, set the trusted proxy headers in the dashboard (**Settings → Application**) so rate limiting sees real client IPs.
+- Chat refreshes by polling every 3 seconds, which is fine for small communities. PocketBase's realtime subscriptions are the natural upgrade.
+- Back up `pb_data/`. The dashboard can make scheduled backups, including to S3.
