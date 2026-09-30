@@ -82,6 +82,30 @@ function requireGM(game, user) {
 }
 function addMember(gameId, userId) {
   q.run('INSERT OR IGNORE INTO game_members (game_id, user_id) VALUES (?, ?)', gameId, userId);
+  markRead(userId, 'game', gameId); // the board's history before you joined isn't "unread"
+}
+
+// ---- unread messages
+// Remember the newest message the user has seen in a thread (called whenever they load it).
+function markRead(userId, kind, threadId) {
+  const max = q.get('SELECT COALESCE(MAX(id), 0) AS id FROM messages WHERE kind = ? AND thread_id = ?', kind, threadId).id;
+  q.run(`INSERT INTO thread_reads (user_id, kind, thread_id, last_read_id) VALUES (?, ?, ?, ?)
+         ON CONFLICT (user_id, kind, thread_id) DO UPDATE SET last_read_id = MAX(last_read_id, excluded.last_read_id)`,
+    userId, kind, threadId, max);
+}
+// Unread counts per thread: messages from other people, not deleted, newer than what the user has seen,
+// in DMs they're part of and boards of games they're in.
+function unreadCounts(userId) {
+  const rows = q.all(`
+    SELECT m.kind, m.thread_id AS threadId, COUNT(*) AS n FROM messages m
+    LEFT JOIN thread_reads r ON r.user_id = ? AND r.kind = m.kind AND r.thread_id = m.thread_id
+    WHERE m.user_id != ? AND m.deleted = 0 AND m.id > COALESCE(r.last_read_id, 0) AND (
+      (m.kind = 'dm' AND m.thread_id IN (SELECT id FROM dm_threads WHERE user_a = ? OR user_b = ?)) OR
+      (m.kind = 'game' AND m.thread_id IN (SELECT game_id FROM game_members WHERE user_id = ?)))
+    GROUP BY m.kind, m.thread_id`, userId, userId, userId, userId, userId);
+  const out = { total: 0, dm: {}, game: {} };
+  for (const r of rows) { out[r.kind][r.threadId] = r.n; out.total += r.n; }
+  return out;
 }
 
 function getOrCreateDm(u1, u2) {
@@ -246,10 +270,13 @@ app.get('/api/me', auth, (req, res) => {
   const unread = q.get('SELECT COUNT(*) AS c FROM notifications WHERE user_id = ? AND is_read = 0', req.user.id).c;
   const pending = q.get("SELECT email FROM email_tokens WHERE user_id = ? AND kind = 'verify' AND expires_at > ?", req.user.id, now());
   res.json({ id: req.user.id, username: req.user.username, isAdmin: !!req.user.is_admin, unread,
+    unreadMessages: unreadCounts(req.user.id).total,
     displayName: req.user.display_name, pronouns: req.user.pronouns, bio: req.user.bio,
     hasPassword: !!req.user.pass_hash, email: req.user.email || null, pendingEmail: pending ? pending.email : null,
     googleEmail: req.user.google_sub ? (req.user.google_email || 'your Google account') : null });
 });
+
+app.get('/api/unread', auth, (req, res) => res.json(unreadCounts(req.user.id)));
 
 app.get('/api/config', (req, res) => res.json({ googleClientId: GOOGLE_CLIENT_ID || null }));
 
@@ -513,6 +540,7 @@ app.delete('/api/games/:id', auth, wrap((req, res) => {
   const members = q.all('SELECT user_id FROM game_members WHERE game_id = ? AND user_id != ?', g.id, req.user.id);
   for (const m of members) notify(m.user_id, 'game_cancelled', { gameTitle: g.title });
   q.run("DELETE FROM messages WHERE kind = 'game' AND thread_id = ?", g.id);
+  q.run("DELETE FROM thread_reads WHERE kind = 'game' AND thread_id = ?", g.id);
   q.run('DELETE FROM games WHERE id = ?', g.id);
   res.json({ ok: true });
 }));
@@ -622,6 +650,7 @@ app.post('/api/games/:id/leave', auth, wrap((req, res) => {
 // ---------------------------------------------------------------- game message boards
 app.get('/api/games/:id/messages', auth, wrap((req, res) => {
   const g = getGame(req.params.id); requireMember(g, req.user);
+  markRead(req.user.id, 'game', g.id);
   res.json(listMessages('game', g.id, req.user, g.gm_id === req.user.id, req.query.after));
 }));
 app.post('/api/games/:id/messages', auth, wrap((req, res) => {
@@ -660,6 +689,7 @@ app.get('/api/dms/:id', auth, wrap((req, res) => {
 }));
 app.get('/api/dms/:id/messages', auth, wrap((req, res) => {
   const t = getDmForUser(req.params.id, req.user);
+  markRead(req.user.id, 'dm', t.id);
   res.json(listMessages('dm', t.id, req.user, true, req.query.after)); // both participants moderate a DM
 }));
 app.post('/api/dms/:id/messages', auth, wrap((req, res) => {

@@ -78,9 +78,10 @@ To make an existing account part of the admin/moderation team, run `npm run make
   - **Private:** not listed and has no link. The GM invites players by username, and each player accepts from their notifications.
 - **Invite link** (`/join/<token>`): opening it adds the game to your calendar and gives you board access right away. If you aren't logged in, it joins you after you log in or sign up. The GM can reset the link, and players who were kicked can't use it to rejoin.
 - **Public list:** clicking a game opens its details and an "Ask to join" button. Asking does **not** join you. The GM gets a notification and a DM opens with your intro message. The DM shows the GM a "Let them join / Decline" banner, so she can decide based on the chat.
-- **Availability (Profile menu, top-right):** a month calendar. Pick a day, add time windows, and set each window to not repeat, repeat **weekly** (same weekday) or repeat **monthly** (same date, moved to the month's last day if that date doesn't exist). Find games then only shows public games with a session that fits entirely inside one of your windows. A toggle turns the filter off.
+- **Availability (Profile menu, or the "Set my availability" button on Find games):** a month calendar. Pick a day, add time windows, and set each window to not repeat, repeat **weekly** (same weekday) or repeat **monthly** (same date, moved to the month's last day if that date doesn't exist). Find games then only shows public games with a session that fits entirely inside one of your windows. A toggle turns the filter off.
 
 **Messaging**
+- **Unread markers:** a red count on the Messages tab and on each DM or game board with new posts from other people. Opening a conversation marks it read. Deleted messages, your own messages, and board history from before you joined a game never count.
 - **DMs:** private between two people, and either of them can delete messages in the thread. Both can post, and either can report the other.
 - **Game boards:** every member can post, see the full history, delete their own messages, DM other players and report anyone, including the GM. Click a name in the board or the member list to do this.
 - **GM powers:** delete any message on the board, and kick players. A kicked player loses board access and can't rejoin with the link.

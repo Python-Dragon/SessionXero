@@ -151,6 +151,24 @@ CREATE TABLE IF NOT EXISTS email_tokens (
 );
 `);
 
+// Unread tracking: the newest message id each user has seen in each DM / game board.
+// On first creation, everything that already exists counts as read, so nobody starts with a flood of badges.
+const hadReads = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'thread_reads'").get();
+db.exec(`CREATE TABLE IF NOT EXISTS thread_reads (
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind          TEXT NOT NULL,     -- dm | game (same as messages.kind)
+  thread_id     INTEGER NOT NULL,
+  last_read_id  INTEGER NOT NULL,
+  PRIMARY KEY (user_id, kind, thread_id)
+)`);
+if (!hadReads) db.exec(`
+  INSERT OR IGNORE INTO thread_reads (user_id, kind, thread_id, last_read_id)
+    SELECT p.uid, 'dm', p.tid, (SELECT COALESCE(MAX(id), 0) FROM messages WHERE kind = 'dm' AND thread_id = p.tid)
+    FROM (SELECT id AS tid, user_a AS uid FROM dm_threads UNION ALL SELECT id, user_b FROM dm_threads) p;
+  INSERT OR IGNORE INTO thread_reads (user_id, kind, thread_id, last_read_id)
+    SELECT m.user_id, 'game', m.game_id, (SELECT COALESCE(MAX(id), 0) FROM messages WHERE kind = 'game' AND thread_id = m.game_id)
+    FROM game_members m;`);
+
 // IANA time zone of the GM's computer when the game was saved. Recurring sessions keep the
 // same wall-clock time in this zone. NULL (older games) means "use the viewer's zone".
 const gameCols = db.prepare('PRAGMA table_info(games)').all().map(c => c.name);

@@ -463,15 +463,16 @@ function googleButton(onCredential, text = 'signin_with') {
 }
 
 // ============================================================ shell (top bar, host button)
-let badgeEl, notifWrap;
+let badgeEl, msgBadgeEl, notifWrap;
 function shell() {
   badgeEl = h('span', { class: 'badge hidden' });
+  msgBadgeEl = h('span', { class: 'nav-badge hidden', 'aria-label': 'unread messages' });
   const bell = h('button', { class: 'icon-btn', title: 'Notifications', 'aria-label': 'Notifications', onclick: e => { e.stopPropagation(); toggleNotifications(); } }, icon('bell'), badgeEl);
   notifWrap = h('div', { style: 'position:relative' }, bell);
   const nav = h('nav', { class: 'nav' },
     h('a', { href: '#/calendar', 'data-r': 'calendar' }, 'Calendar'),
     h('a', { href: '#/find', 'data-r': 'find' }, 'Find games'),
-    h('a', { href: '#/messages', 'data-r': 'messages' }, 'Messages'),
+    h('a', { href: '#/messages', 'data-r': 'messages' }, 'Messages', msgBadgeEl),
     state.me.isAdmin && h('a', { href: '#/admin', 'data-r': 'admin' }, 'Admin'));
   const userBtn = h('button', { class: 'icon-btn', title: 'Profile and availability', 'aria-label': 'Profile menu', onclick: e => { e.stopPropagation(); openPopover(userBtn, [
     { label: `Signed in as ${state.me.username}`, onClick: () => {} },
@@ -510,13 +511,18 @@ async function renderView() {
 
 // ============================================================ notifications
 let badgeTimer;
-async function pollBadge() {
+const countLabel = n => (n > 99 ? '99+' : String(n));
+// Bell = notifications; red count on the Messages tab = unread DMs and game-board posts.
+async function refreshBadges() {
+  let me;
+  try { me = await api('/me', { quiet: true }); } catch { return; }
+  state.unread = me.unread;
+  badgeEl.textContent = countLabel(state.unread); badgeEl.classList.toggle('hidden', !state.unread);
+  msgBadgeEl.textContent = countLabel(me.unreadMessages); msgBadgeEl.classList.toggle('hidden', !me.unreadMessages);
+}
+function pollBadge() {
   clearInterval(badgeTimer);
-  const tick = async () => {
-    try { const me = await api('/me', { quiet: true }); state.unread = me.unread; } catch { return; }
-    badgeEl.textContent = state.unread; badgeEl.classList.toggle('hidden', !state.unread);
-  };
-  tick(); badgeTimer = setInterval(tick, 10000);
+  refreshBadges(); badgeTimer = setInterval(refreshBadges, 10000);
 }
 async function toggleNotifications() {
   const existing = notifWrap.querySelector('.dropdown');
@@ -1071,9 +1077,10 @@ async function viewFind(view) {
   toggle.addEventListener('change', () => { state.onlyAvailable = toggle.checked; draw(); });
   view.append(h('div', { class: 'row', style: 'margin-bottom:1rem' },
     h('h2', { style: 'margin:0' }, 'Public games'), count, h('div', { class: 'spacer' }), search,
-    h('label', { class: 'row', style: 'margin:0;color:var(--text)' }, toggle, 'Only during my availability')));
+    h('label', { class: 'row', style: 'margin:0;color:var(--text)' }, toggle, 'Only during my availability'),
+    h('button', { class: 'btn' + (hasAvail ? '' : ' primary'), onclick: openAvailability }, icon('clock'), hasAvail ? ' Edit my availability' : ' Set my availability')));
   if (!hasAvail) view.append(h('div', { class: 'banner' }, 'Tip: ',
-    h('button', { class: 'link', onclick: openAvailability }, 'set your availability'), ' (Profile menu, top right) to only see games at times you can play.'));
+    h('button', { class: 'link', onclick: openAvailability }, 'set your availability'), ' to only see games at times you can play. You can also find it in the Profile menu.'));
   view.append(grid);
   draw();
 }
@@ -1115,6 +1122,7 @@ function chatBox(opts) {
     const json = JSON.stringify(msgs);
     if (json === lastJSON) return;
     lastJSON = json;
+    refreshBadges(); // loading the thread marked it read on the server
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
     log.innerHTML = '';
     if (!msgs.length) log.append(h('div', { class: 'empty' }, opts.kind === 'dm' ? 'No messages yet. Say hello!' : 'No posts yet. Start the conversation!'));
@@ -1186,17 +1194,32 @@ function gameUserMenu(game, user, anchor, message) {
 
 // ============================================================ messages view
 async function viewMessages(view, kind, id) {
-  const [dms, games] = await Promise.all([api('/dms'), refreshMyGames()]);
+  const [dms, games, unread] = await Promise.all([api('/dms'), refreshMyGames(), api('/unread')]);
   const list = h('div', { class: 'thread-list' });
+  // Red count on each conversation with unread messages (not the one you have open; opening it reads it).
+  const badges = { dm: {}, game: {} };
+  const isOpen = (k, tid) => kind === k && Number(id) === tid;
+  const threadButton = (k, tid, title, preview) => {
+    const badge = badges[k][tid] = h('span', { class: 'thread-badge hidden' });
+    return h('button', { class: 'thread-item' + (isOpen(k, tid) ? ' active' : ''), onclick: () => go(`#/messages/${k}/${tid}`) },
+      h('div', { class: 'thread-title' }, h('span', {}, title), badge), h('div', { class: 'preview' }, preview));
+  };
+  const paintBadges = u => {
+    for (const k of ['dm', 'game']) for (const [tid, el] of Object.entries(badges[k])) {
+      const n = isOpen(k, Number(tid)) ? 0 : (u[k][tid] || 0);
+      el.textContent = countLabel(n); el.classList.toggle('hidden', !n);
+      el.parentNode.parentNode.classList.toggle('unread', !!n);
+    }
+  };
   list.append(h('div', { class: 'row', style: 'justify-content:space-between' },
     h('div', { class: 'section' }, 'Direct messages'), h('button', { class: 'btn small', onclick: openNewDm }, '+ New')));
   if (!dms.length) list.append(h('div', { class: 'muted small' }, 'No conversations yet.'));
-  for (const t of dms) list.append(h('button', { class: 'thread-item' + (kind === 'dm' && Number(id) === t.id ? ' active' : ''), onclick: () => go('#/messages/dm/' + t.id) },
-    h('div', {}, t.other.username), h('div', { class: 'preview' }, t.lastPreview || 'No messages yet')));
+  for (const t of dms) list.append(threadButton('dm', t.id, t.other.username, t.lastPreview || 'No messages yet'));
   list.append(h('div', { class: 'section' }, 'Game boards'));
   if (!games.length) list.append(h('div', { class: 'muted small' }, "You're not in any games yet."));
-  for (const g of games) list.append(h('button', { class: 'thread-item' + (kind === 'game' && Number(id) === g.id ? ' active' : ''), onclick: () => go('#/messages/game/' + g.id) },
-    h('div', {}, g.title), h('div', { class: 'preview' }, g.isGM ? 'You are the GM' : `GM ${g.gm.username}`)));
+  for (const g of games) list.append(threadButton('game', g.id, g.title, g.isGM ? 'You are the GM' : `GM ${g.gm.username}`));
+  paintBadges(unread);
+  every(10000, () => api('/unread', { quiet: true }).then(paintBadges).catch(() => {}));
 
   const right = h('div', { class: 'panel' });
   view.append(h('div', { class: 'chat-layout' }, h('div', { class: 'panel' }, list), right));
