@@ -1,0 +1,19 @@
+{
+  "name": "tabletop-scheduler",
+  "version": "1.0.0",
+  "description": "Find, host and schedule tabletop RPG games",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --no-warnings server.js",
+    "make-admin": "node --no-warnings scripts/make-admin.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.22.3",
+    "nodemailer": "^10.0.13"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "private": true
+}
